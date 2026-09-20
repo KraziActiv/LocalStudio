@@ -3,11 +3,15 @@
 #include "Core/LocalStudioAssetUtils.h"
 #include "Core/LocalStudioJsonUtils.h"
 
+#include "GameFramework/Actor.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/GameModeBase.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
-#include "GameFramework/Actor.h"
-#include "GameFramework/GameModeBase.h"
+#include "GameFramework/PlayerState.h"
+#include "Engine/GameInstance.h"
+#include "Blueprint/UserWidget.h"
 
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -49,38 +53,37 @@ namespace
 {
     static EBlueprintType ResolveBlueprintTypeFromString(const FString& RawType)
     {
-        FString Normalized = RawType.TrimStartAndEnd().ToLower();
+        const FString Normalized = RawType.TrimStartAndEnd().ToLower();
 
         if (Normalized.Contains(TEXT("interface")))
         {
-            return EBlueprintType::BPTYPE_Interface;
+            return BPTYPE_Interface;
         }
         if (Normalized.Contains(TEXT("macro")))
         {
-            return EBlueprintType::BPTYPE_MacroLibrary;
+            return BPTYPE_MacroLibrary;
         }
-        if (Normalized.Contains(TEXT("function_library")) || Normalized.Contains(TEXT("functionlibrary")) || Normalized.Contains(TEXT("function library")))
+        if (Normalized.Contains(TEXT("function_library")) ||
+            Normalized.Contains(TEXT("functionlibrary")) ||
+            Normalized.Contains(TEXT("function library")))
         {
-            return EBlueprintType::BPTYPE_FunctionLibrary;
+            return BPTYPE_FunctionLibrary;
         }
-        if (Normalized.Contains(TEXT("widget")))
+        if (Normalized.Contains(TEXT("levelscript")) ||
+            Normalized.Contains(TEXT("level_script")))
         {
-            return EBlueprintType::BPTYPE_Normal;
+            return BPTYPE_LevelScript;
         }
-        if (Normalized.Contains(TEXT("anim")))
+        if (Normalized.Contains(TEXT("editorutility")) ||
+            Normalized.Contains(TEXT("editor_utility")))
         {
-            return EBlueprintType::BPTYPE_Normal;
-        }
-        if (Normalized.Contains(TEXT("levelscript")) || Normalized.Contains(TEXT("level_script")))
-        {
-            return EBlueprintType::BPTYPE_LevelScript;
-        }
-        if (Normalized.Contains(TEXT("editorutility")) || Normalized.Contains(TEXT("editor_utility")))
-        {
-            return EBlueprintType::BPTYPE_EditorUtilityBlueprint;
+            return BPTYPE_EditorUtilityBlueprint;
         }
 
-        return EBlueprintType::BPTYPE_Normal;
+        // Widget and animation Blueprint creation require specialized factories
+        // and additional assets. Keep them on the normal creation path until
+        // those factories are implemented rather than emitting invalid types.
+        return BPTYPE_Normal;
     }
 }
 
@@ -96,7 +99,9 @@ FBuilderExecutionResult FLocalStudioBlueprintBuilder::ExecutePlan(TSharedPtr<FJs
     }
 
     const TArray<TSharedPtr<FJsonValue>>* BlueprintsArray = nullptr;
-    if (ParsedData->TryGetArrayField(TEXT("blueprints"), BlueprintsArray) && BlueprintsArray && BlueprintsArray->Num() > 0)
+    if (ParsedData->TryGetArrayField(TEXT("blueprints"), BlueprintsArray) &&
+        BlueprintsArray &&
+        BlueprintsArray->Num() > 0)
     {
         FString CombinedSummaries;
         bool bAllSucceeded = true;
@@ -105,14 +110,13 @@ FBuilderExecutionResult FLocalStudioBlueprintBuilder::ExecutePlan(TSharedPtr<FJs
         {
             if (!BPValue.IsValid() || BPValue->Type != EJson::Object)
             {
+                bAllSucceeded = false;
                 continue;
             }
 
-            FBuilderExecutionResult SingleResult = ExecutePlan(BPValue->AsObject());
-            if (!SingleResult.bSuccess)
-            {
-                bAllSucceeded = false;
-            }
+            const FBuilderExecutionResult SingleResult = ExecutePlan(BPValue->AsObject());
+            bAllSucceeded &= SingleResult.bSuccess;
+
             if (!SingleResult.UserSummary.IsEmpty())
             {
                 CombinedSummaries += SingleResult.UserSummary + TEXT("\n\n");
@@ -124,12 +128,21 @@ FBuilderExecutionResult FLocalStudioBlueprintBuilder::ExecutePlan(TSharedPtr<FJs
         return Result;
     }
 
-    FString BlueprintName = ParsedData->HasField(TEXT("blueprint_name")) ? ParsedData->GetStringField(TEXT("blueprint_name")) : TEXT("BP_NewBlueprint");
-    FString ParentClassName = ParsedData->HasField(TEXT("parent_class")) ? ParsedData->GetStringField(TEXT("parent_class")) : TEXT("Actor");
-    FString BlueprintTypeName = ParsedData->HasField(TEXT("blueprint_type")) ? ParsedData->GetStringField(TEXT("blueprint_type")) : TEXT("Normal");
-    FString PackagePath = ParsedData->HasField(TEXT("package_path")) ? ParsedData->GetStringField(TEXT("package_path")) : TEXT("/Game/LocalStudio/Blueprints");
+    FString BlueprintName = ParsedData->HasField(TEXT("blueprint_name"))
+        ? ParsedData->GetStringField(TEXT("blueprint_name"))
+        : TEXT("BP_NewBlueprint");
+    FString ParentClassName = ParsedData->HasField(TEXT("parent_class"))
+        ? ParsedData->GetStringField(TEXT("parent_class"))
+        : TEXT("Actor");
+    const FString BlueprintTypeName = ParsedData->HasField(TEXT("blueprint_type"))
+        ? ParsedData->GetStringField(TEXT("blueprint_type"))
+        : TEXT("Normal");
+    FString PackagePath = ParsedData->HasField(TEXT("package_path"))
+        ? ParsedData->GetStringField(TEXT("package_path"))
+        : TEXT("/Game/LocalStudio/Blueprints");
 
-    if (ParentClassName.Equals(TEXT("Object"), ESearchCase::IgnoreCase) || ParentClassName.Equals(TEXT("UObject"), ESearchCase::IgnoreCase))
+    if (ParentClassName.Equals(TEXT("Object"), ESearchCase::IgnoreCase) ||
+        ParentClassName.Equals(TEXT("UObject"), ESearchCase::IgnoreCase))
     {
         ParentClassName = TEXT("Actor");
     }
@@ -146,32 +159,28 @@ FBuilderExecutionResult FLocalStudioBlueprintBuilder::ExecutePlan(TSharedPtr<FJs
         return Result;
     }
 
-    EBlueprintType BlueprintType = ResolveBlueprintTypeFromString(BlueprintTypeName);
+    const EBlueprintType BlueprintType = ResolveBlueprintTypeFromString(BlueprintTypeName);
 
 #if WITH_EDITOR
-    UBlueprint* ExistingBlueprint = FLocalStudioAssetUtils::FindAssetByName<UBlueprint>(BlueprintName);
-    UBlueprint* NewBlueprint = ExistingBlueprint;
-    bool bCreatedBlueprint = false;
+    UBlueprint* NewBlueprint = FLocalStudioAssetUtils::FindAssetByName<UBlueprint>(BlueprintName);
+    const bool bCreatedBlueprint = NewBlueprint == nullptr;
 
-    if (!ExistingBlueprint)
+    if (!NewBlueprint)
     {
-        FString FullPackagePath = PackagePath;
-        if (!FullPackagePath.StartsWith(TEXT("/Game/")))
+        if (!PackagePath.StartsWith(TEXT("/Game/")))
         {
-            FullPackagePath = TEXT("/Game/") + FullPackagePath;
+            PackagePath = TEXT("/Game/") + PackagePath;
+        }
+        if (!PackagePath.EndsWith(TEXT("/")))
+        {
+            PackagePath += TEXT("/");
         }
 
-        if (!FullPackagePath.EndsWith(TEXT("/")))
-        {
-            FullPackagePath += TEXT("/");
-        }
-
-        FString PackageString = FullPackagePath + BlueprintName;
-
+        const FString PackageString = PackagePath + BlueprintName;
         UPackage* Package = CreatePackage(*PackageString);
         if (!Package)
         {
-            Result.UserSummary = FString::Printf(TEXT("Failed to create package for blueprint '%s' at '%s'."), *BlueprintName, *PackageString);
+            Result.UserSummary = FString::Printf(TEXT("Failed to create package for Blueprint '%s' at '%s'."), *BlueprintName, *PackageString);
             return Result;
         }
 
@@ -181,8 +190,7 @@ FBuilderExecutionResult FLocalStudioBlueprintBuilder::ExecutePlan(TSharedPtr<FJs
             FName(*BlueprintName),
             BlueprintType,
             UBlueprint::StaticClass(),
-            UBlueprintGeneratedClass::StaticClass()
-        );
+            UBlueprintGeneratedClass::StaticClass());
 
         if (!NewBlueprint)
         {
@@ -190,14 +198,7 @@ FBuilderExecutionResult FLocalStudioBlueprintBuilder::ExecutePlan(TSharedPtr<FJs
             return Result;
         }
 
-        bCreatedBlueprint = true;
         FAssetRegistryModule::AssetCreated(NewBlueprint);
-    }
-
-    if (!NewBlueprint)
-    {
-        Result.UserSummary = FString::Printf(TEXT("Blueprint '%s' could not be created or found."), *BlueprintName);
-        return Result;
     }
 
     int32 VariablesAdded = 0;
@@ -210,29 +211,30 @@ FBuilderExecutionResult FLocalStudioBlueprintBuilder::ExecutePlan(TSharedPtr<FJs
     int32 ComponentsSkipped = 0;
     int32 ComponentsAlreadyExisting = 0;
 
-    if (!ProcessComponents(NewBlueprint, ParsedData, ParentClass, ComponentsAdded, ComponentsSkipped, ComponentsAlreadyExisting))
+    if (!ProcessComponents(NewBlueprint, ParsedData, ParentClass, ComponentsAdded, ComponentsSkipped, ComponentsAlreadyExisting) ||
+        !ProcessVariables(NewBlueprint, ParsedData, ParentClass, VariablesAdded, VariablesSkipped, VariablesAlreadyExisting) ||
+        !ProcessFunctions(NewBlueprint, ParsedData, ParentClass, FunctionsAdded, FunctionsSkipped, FunctionsAlreadyExisting))
     {
-        Result.UserSummary = TEXT("Failed while processing Blueprint components.");
+        Result.UserSummary = TEXT("Failed while processing Blueprint declarations.");
         return Result;
     }
 
-    if (!ProcessVariables(NewBlueprint, ParsedData, ParentClass, VariablesAdded, VariablesSkipped, VariablesAlreadyExisting))
-    {
-        Result.UserSummary = TEXT("Failed while processing Blueprint variables.");
-        return Result;
-    }
+    int32 NodesAdded = 0;
+    int32 NodesSkipped = 0;
+    ProcessFunctionNodes(NewBlueprint, ParsedData, NodesAdded, NodesSkipped);
 
-    if (!ProcessFunctions(NewBlueprint, ParsedData, ParentClass, FunctionsAdded, FunctionsSkipped, FunctionsAlreadyExisting))
-    {
-        Result.UserSummary = TEXT("Failed while processing Blueprint functions.");
-        return Result;
-    }
+    int32 ConnectionsMade = 0;
+    int32 ConnectionsSkipped = 0;
+    ProcessFunctionConnections(NewBlueprint, ParsedData, ConnectionsMade, ConnectionsSkipped);
 
     NewBlueprint->MarkPackageDirty();
     FKismetEditorUtilities::CompileBlueprint(NewBlueprint);
 
-    FString AssetPath = NewBlueprint->GetOutermost()->GetName();
-    FString PackageFilename = FPackageName::LongPackageNameToFilename(AssetPath, FPackageName::GetAssetPackageExtension());
+    const FString AssetPath = NewBlueprint->GetOutermost()->GetName();
+    const FString PackageFilename = FPackageName::LongPackageNameToFilename(
+        AssetPath,
+        FPackageName::GetAssetPackageExtension());
+
     FSavePackageArgs SaveArgs;
     SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
     SaveArgs.Error = GWarn;
@@ -240,20 +242,20 @@ FBuilderExecutionResult FLocalStudioBlueprintBuilder::ExecutePlan(TSharedPtr<FJs
 
     if (!UPackage::SavePackage(NewBlueprint->GetOutermost(), NewBlueprint, *PackageFilename, SaveArgs))
     {
-        Result.UserSummary = FString::Printf(TEXT("Blueprint was created but failed to save: %s"), *AssetPath);
+        Result.UserSummary = FString::Printf(TEXT("Blueprint was created or updated but failed to save: %s"), *AssetPath);
         return Result;
     }
 
     Result.bSuccess = true;
-
-    FString BlueprintAction = bCreatedBlueprint ? TEXT("created") : TEXT("updated");
+    const FString BlueprintAction = bCreatedBlueprint ? TEXT("created") : TEXT("updated");
     Result.UserSummary = FString::Printf(
         TEXT("Successfully %s Blueprint [%s] at %s.\n")
         TEXT("Components: Added=%d Existing=%d Skipped=%d\n")
         TEXT("Variables: Added=%d Existing=%d Skipped=%d\n")
         TEXT("Functions: Added=%d Existing=%d Skipped=%d\n")
         TEXT("Blueprint Type: %s\n")
-        TEXT("Parent Class: %s"),
+        TEXT("Parent Class: %s\n")
+        TEXT("Graph nodes are currently deferred: %d skipped; connections deferred: %d."),
         *BlueprintAction,
         *BlueprintName,
         *AssetPath,
@@ -267,8 +269,9 @@ FBuilderExecutionResult FLocalStudioBlueprintBuilder::ExecutePlan(TSharedPtr<FJs
         FunctionsAlreadyExisting,
         FunctionsSkipped,
         *UEnum::GetValueAsString(BlueprintType),
-        *ParentClassName
-    );
+        *ParentClassName,
+        NodesSkipped,
+        ConnectionsSkipped);
 
     return Result;
 #else
@@ -281,18 +284,34 @@ FString FLocalStudioBlueprintBuilder::GetTechnicalGuardrails() const
 {
     return TEXT(R"raw(
 You are LocalStudio, an Unreal Engine 5.7 Blueprint development assistant.
-Your job is to produce a strict JSON intermediate representation that LocalStudio can translate into an Unreal Engine Blueprint.
+Return one strict JSON object that LocalStudio translates into a Blueprint asset.
 
-Core rules:
-- Support all Blueprint asset kinds: normal Blueprint, Interface, Function Library, Macro Library, Widget, and other standard Unreal Blueprint families.
-- Implement only what the user explicitly requested.
-- Default to a safe normal Blueprint when the requested type is not clear.
-- Respect the parent class requested by the user or the engine default if unspecified.
-- Do not invent speculative assets or graph logic.
-- Use the smallest valid Blueprint structure.
-- If a requested Blueprint type is unsupported in the current builder phase, return a clear error in the JSON result.
+Supported blueprint_type values:
+- Normal
+- Interface
+- FunctionLibrary
+- MacroLibrary
+- LevelScript
+- EditorUtilityBlueprint
+- Widget
+- AnimBlueprint
+- ActorComponent
+- Character
+- Pawn
+- PlayerController
+- GameMode
+- GameState
+- PlayerState
 
-Output format:
+Rules:
+- Implement only what the user explicitly requests.
+- Use the requested parent_class exactly when it is available in the supplied project or Unreal context.
+- Do not invent parent classes or silently replace a requested custom class.
+- Components, variables, and function signatures may be generated.
+- Graph nodes and graph connections are temporarily deferred during the Blueprint asset validation phase; leave nodes and connections empty unless specifically instructed otherwise.
+- Return raw valid JSON only. Do not use markdown fences or commentary.
+
+Schema:
 {
   "blueprint_name": "BP_Example",
   "parent_class": "Actor",
@@ -305,23 +324,6 @@ Output format:
   "nodes": [],
   "connections": []
 }
-
-Supported blueprint_type values:
-- Normal
-- Interface
-- FunctionLibrary
-- MacroLibrary
-- Widget
-- ActorComponent
-- Character
-- Pawn
-- PlayerController
-- GameMode
-- GameState
-- PlayerState
-- AnimBlueprint
-
-Return only raw valid JSON. No markdown fences.
 )raw");
 }
 
@@ -332,22 +334,33 @@ bool FLocalStudioBlueprintBuilder::ParseResponse(const FString& RawResponse, TSh
 
 FString FLocalStudioBlueprintBuilder::PreparePromptContext(const FString& RawUserPrompt)
 {
-    FString Context = FString::Printf(
-        TEXT("=== AVAILABLE BASE BLUEPRINT PARENT CLASSES ===\n")
-        TEXT("Actor\nCharacter\nPawn\nPlayerController\nPlayerState\nGameModeBase\nGameStateBase\nActorComponent\nSceneComponent\nUserWidget\nGameInstance\n\n")
-        TEXT("USER REQUEST: %s\n\n")
-        TEXT("When creating a Blueprint, prefer a supported Unreal parent class and a standard Blueprint type.\n")
-        TEXT("Do not invent unsupported Blueprint families or duplicate old logic.\n")
-        TEXT("If the request is for a complete system, construct a Blueprint plan and leave graph node complexity disabled until the Blueprint asset pipeline is validated."),
-        *RawUserPrompt
-    );
+    FString CustomClassesList;
+    const FString SourceDir = FPaths::Combine(FPaths::ProjectDir(), TEXT("Source"));
+    TArray<FString> FoundHeaders;
+    IFileManager::Get().FindFilesRecursive(FoundHeaders, *SourceDir, TEXT("*.h"), true, false, false);
 
-    return Context;
+    for (const FString& HeaderPath : FoundHeaders)
+    {
+        const FString BaseName = FPaths::GetBaseFilename(HeaderPath);
+        if (!BaseName.EndsWith(TEXT(".generated")))
+        {
+            CustomClassesList += FString::Printf(TEXT("- %s\n"), *BaseName);
+        }
+    }
+
+    return FString::Printf(
+        TEXT("=== PROJECT CUSTOM C++ CLASSES ===\n%s\n")
+        TEXT("=== STANDARD PARENT CLASSES ===\n")
+        TEXT("Actor, Character, Pawn, PlayerController, PlayerState, GameModeBase, GameStateBase, ActorComponent, SceneComponent, UserWidget, GameInstance\n\n")
+        TEXT("USER REQUEST:\n%s\n\n")
+        TEXT("Use the exact requested custom C++ parent when it exists. Do not invent or silently substitute a parent class."),
+        *CustomClassesList,
+        *RawUserPrompt);
 }
 
 UClass* FLocalStudioBlueprintBuilder::ResolveParentClass(const FString& InClassName)
 {
-    FString CleanClassName = InClassName.TrimStartAndEnd();
+    const FString CleanClassName = InClassName.TrimStartAndEnd();
     if (CleanClassName.IsEmpty())
     {
         return AActor::StaticClass();
@@ -367,7 +380,7 @@ UClass* FLocalStudioBlueprintBuilder::ResolveParentClass(const FString& InClassN
         { TEXT("GameInstance"), UGameInstance::StaticClass() }
     };
 
-    if (const UClass* const* Found = NativeClassMap.Find(CleanClassName))
+    if (UClass* const* Found = NativeClassMap.Find(CleanClassName))
     {
         return *Found;
     }
@@ -376,7 +389,6 @@ UClass* FLocalStudioBlueprintBuilder::ResolveParentClass(const FString& InClassN
     {
         return ScriptClass;
     }
-
     if (UClass* CustomClass = FindFirstObject<UClass>(*CleanClassName))
     {
         return CustomClass;
@@ -416,8 +428,8 @@ UClass* FLocalStudioBlueprintBuilder::ResolveParentClass(const FString& InClassN
 
 bool FLocalStudioBlueprintBuilder::ResolveEdGraphPinType(const FString& InTypeStr, const FString& InContainerStr, FEdGraphPinType& OutPinType)
 {
-    FString PinType = InTypeStr.TrimStartAndEnd().ToLower();
-    FString ContainerType = InContainerStr.TrimStartAndEnd().ToLower();
+    const FString PinType = InTypeStr.TrimStartAndEnd().ToLower();
+    const FString ContainerType = InContainerStr.TrimStartAndEnd().ToLower();
 
     if (ContainerType == TEXT("array"))
     {
@@ -484,7 +496,7 @@ bool FLocalStudioBlueprintBuilder::ResolveEdGraphPinType(const FString& InTypeSt
         OutPinType.PinSubCategoryObject = TBaseStructure<FVector>::Get();
         return true;
     }
-    if (PinType == TEXT("vector2d") || PinType == TEXT("vector2d"))
+    if (PinType == TEXT("vector2d"))
     {
         OutPinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
         OutPinType.PinSubCategoryObject = TBaseStructure<FVector2D>::Get();
@@ -508,18 +520,12 @@ bool FLocalStudioBlueprintBuilder::ResolveEdGraphPinType(const FString& InTypeSt
         OutPinType.PinSubCategoryObject = AActor::StaticClass();
         return true;
     }
+
     return false;
 }
 
 bool FLocalStudioBlueprintBuilder::ProcessPromotableOperatorNode(UBlueprint* Blueprint, UEdGraph* FunctionGraph, const FString& NodeId, const FName& OperationName, const FName& MathLibraryFunctionName, const FString& FunctionName)
 {
-    if (!Blueprint || !FunctionGraph)
-    {
-        return false;
-    }
-
-    // Blueprint graph node creation is intentionally disabled in this phase.
-    // This method remains as a compatibility stub and will be re-enabled later.
     UE_LOG(LogTemp, Log, TEXT("Blueprint graph node creation is temporarily disabled. Skipping node '%s' in function '%s'."), *NodeId, *FunctionName);
     return true;
 }
@@ -544,7 +550,7 @@ bool FLocalStudioBlueprintBuilder::ProcessComponents(UBlueprint* Blueprint, TSha
             continue;
         }
 
-        TSharedPtr<FJsonObject> ComponentObject = ComponentValue->AsObject();
+        const TSharedPtr<FJsonObject> ComponentObject = ComponentValue->AsObject();
         if (!ComponentObject.IsValid())
         {
             continue;
@@ -572,10 +578,11 @@ bool FLocalStudioBlueprintBuilder::ProcessComponents(UBlueprint* Blueprint, TSha
             ComponentType.Equals(TEXT("ChildActorComponent"), ESearchCase::IgnoreCase))
         {
             ComponentsAdded++;
-            continue;
         }
-
-        ComponentsSkipped++;
+        else
+        {
+            ComponentsSkipped++;
+        }
     }
 
     return true;
@@ -601,7 +608,7 @@ bool FLocalStudioBlueprintBuilder::ProcessVariables(UBlueprint* Blueprint, TShar
             continue;
         }
 
-        TSharedPtr<FJsonObject> VariableObject = VariableValue->AsObject();
+        const TSharedPtr<FJsonObject> VariableObject = VariableValue->AsObject();
         if (!VariableObject.IsValid())
         {
             continue;
@@ -617,24 +624,37 @@ bool FLocalStudioBlueprintBuilder::ProcessVariables(UBlueprint* Blueprint, TShar
         FString VariableType = TEXT("bool");
         VariableObject->TryGetStringField(TEXT("type"), VariableType);
 
-        FEdGraphPinType TempPinType;
-        if (!ResolveEdGraphPinType(VariableType, TEXT("single"), TempPinType))
+        FEdGraphPinType PinType;
+        if (!ResolveEdGraphPinType(VariableType, TEXT("single"), PinType))
         {
             VariablesSkipped++;
             continue;
         }
 
-        if (Blueprint->NewVariables.ContainsByPredicate([&](const FBPVariableDescription& Var)
+        bool bAlreadyExists = false;
+        for (const FBPVariableDescription& ExistingVariable : Blueprint->NewVariables)
+        {
+            if (ExistingVariable.VarName == FName(*VariableName))
             {
-                return Var.VarName == FName(*VariableName);
-            }))
+                bAlreadyExists = true;
+                break;
+            }
+        }
+
+        if (bAlreadyExists)
         {
             VariablesAlreadyExisting++;
             continue;
         }
 
-        FBlueprintEditorUtils::AddMemberVariable(Blueprint, FName(*VariableName), TempPinType);
-        VariablesAdded++;
+        if (FBlueprintEditorUtils::AddMemberVariable(Blueprint, FName(*VariableName), PinType))
+        {
+            VariablesAdded++;
+        }
+        else
+        {
+            VariablesSkipped++;
+        }
     }
 
     return true;
@@ -660,14 +680,15 @@ bool FLocalStudioBlueprintBuilder::ProcessFunctions(UBlueprint* Blueprint, TShar
             continue;
         }
 
-        TSharedPtr<FJsonObject> FunctionObject = FunctionValue->AsObject();
+        const TSharedPtr<FJsonObject> FunctionObject = FunctionValue->AsObject();
         if (!FunctionObject.IsValid())
         {
             continue;
         }
 
         FString FunctionName;
-        if (!FunctionObject->TryGetStringField(TEXT("function_name"), FunctionName) && !FunctionObject->TryGetStringField(TEXT("name"), FunctionName))
+        if (!FunctionObject->TryGetStringField(TEXT("function_name"), FunctionName) &&
+            !FunctionObject->TryGetStringField(TEXT("name"), FunctionName))
         {
             FunctionsSkipped++;
             continue;
@@ -679,7 +700,7 @@ bool FLocalStudioBlueprintBuilder::ProcessFunctions(UBlueprint* Blueprint, TShar
             continue;
         }
 
-        FName FunctionKey(*FunctionName);
+        const FName FunctionKey(*FunctionName);
         bool bAlreadyPresent = false;
         for (UEdGraph* ExistingGraph : Blueprint->FunctionGraphs)
         {
@@ -697,7 +718,11 @@ bool FLocalStudioBlueprintBuilder::ProcessFunctions(UBlueprint* Blueprint, TShar
         }
 
 #if WITH_EDITOR
-        UEdGraph* FunctionGraph = FBlueprintEditorUtils::CreateNewGraph(Blueprint, FunctionKey, UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+        UEdGraph* FunctionGraph = FBlueprintEditorUtils::CreateNewGraph(
+            Blueprint,
+            FunctionKey,
+            UEdGraph::StaticClass(),
+            UEdGraphSchema_K2::StaticClass());
         if (!FunctionGraph)
         {
             FunctionsSkipped++;
@@ -724,18 +749,16 @@ bool FLocalStudioBlueprintBuilder::ProcessFunctions(UBlueprint* Blueprint, TShar
         }
 
         UK2Node_FunctionResult* ResultNode = FBlueprintEditorUtils::FindOrCreateFunctionResultNode(EntryNode);
-        if (ResultNode)
+        if (!EntryNode || !ResultNode)
         {
-            ResultNode->ReconstructNode();
-        }
-
-        if (EntryNode)
-        {
-            EntryNode->ReconstructNode();
+            FunctionsSkipped++;
+            continue;
         }
 
         FString ReturnType;
-        if (FunctionObject->TryGetStringField(TEXT("return_type"), ReturnType) && !ReturnType.IsEmpty() && !ReturnType.Equals(TEXT("void"), ESearchCase::IgnoreCase))
+        if (FunctionObject->TryGetStringField(TEXT("return_type"), ReturnType) &&
+            !ReturnType.IsEmpty() &&
+            !ReturnType.Equals(TEXT("void"), ESearchCase::IgnoreCase))
         {
             FEdGraphPinType Type;
             if (ResolveEdGraphPinType(ReturnType, TEXT("single"), Type))
@@ -754,13 +777,15 @@ bool FLocalStudioBlueprintBuilder::ProcessFunctions(UBlueprint* Blueprint, TShar
                     continue;
                 }
 
-                TSharedPtr<FJsonObject> ParameterObject = ParameterValue->AsObject();
+                const TSharedPtr<FJsonObject> ParameterObject = ParameterValue->AsObject();
                 if (!ParameterObject.IsValid())
                 {
                     continue;
                 }
 
-                FString Name, Type, Direction;
+                FString Name;
+                FString Type;
+                FString Direction;
                 ParameterObject->TryGetStringField(TEXT("name"), Name);
                 ParameterObject->TryGetStringField(TEXT("type"), Type);
                 ParameterObject->TryGetStringField(TEXT("direction"), Direction);
@@ -776,12 +801,10 @@ bool FLocalStudioBlueprintBuilder::ProcessFunctions(UBlueprint* Blueprint, TShar
                     continue;
                 }
 
-                if (Direction.Equals(TEXT("Output"), ESearchCase::IgnoreCase) || Direction.Equals(TEXT("Return"), ESearchCase::IgnoreCase))
+                if (Direction.Equals(TEXT("Output"), ESearchCase::IgnoreCase) ||
+                    Direction.Equals(TEXT("Return"), ESearchCase::IgnoreCase))
                 {
-                    if (ResultNode)
-                    {
-                        ResultNode->CreateUserDefinedPin(FName(*Name), PinType, EGPD_Input);
-                    }
+                    ResultNode->CreateUserDefinedPin(FName(*Name), PinType, EGPD_Input);
                 }
                 else
                 {
@@ -790,14 +813,8 @@ bool FLocalStudioBlueprintBuilder::ProcessFunctions(UBlueprint* Blueprint, TShar
             }
         }
 
-        if (EntryNode)
-        {
-            EntryNode->ReconstructNode();
-        }
-        if (ResultNode)
-        {
-            ResultNode->ReconstructNode();
-        }
+        EntryNode->ReconstructNode();
+        ResultNode->ReconstructNode();
 #endif
 
         FunctionsAdded++;
@@ -824,7 +841,7 @@ bool FLocalStudioBlueprintBuilder::ProcessFunctionNodes(UBlueprint* Blueprint, T
     if (NodesArray && NodesArray->Num() > 0)
     {
         UE_LOG(LogTemp, Warning, TEXT("Blueprint graph node generation is temporarily disabled. Skipping %d node definitions."), NodesArray->Num());
-        NodesSkipped += NodesArray->Num();
+        NodesSkipped = NodesArray->Num();
     }
 
     return true;
@@ -848,7 +865,7 @@ bool FLocalStudioBlueprintBuilder::ProcessFunctionConnections(UBlueprint* Bluepr
     if (ConnectionsArray && ConnectionsArray->Num() > 0)
     {
         UE_LOG(LogTemp, Warning, TEXT("Blueprint graph connection generation is temporarily disabled. Skipping %d connections."), ConnectionsArray->Num());
-        ConnectionsSkipped += ConnectionsArray->Num();
+        ConnectionsSkipped = ConnectionsArray->Num();
     }
 
     return true;
@@ -863,30 +880,3 @@ bool FLocalStudioBlueprintBuilder::CreateSquareRootNode(UBlueprint* Blueprint, U
 {
     return true;
 }
-
-#if WITH_EDITOR
-static bool IsSupportedBlueprintTypeForParentClass(EBlueprintType InType, UClass* ParentClass)
-{
-    if (!ParentClass)
-    {
-        return false;
-    }
-
-    if (ParentClass == UUserWidget::StaticClass() && InType == EBlueprintType::BPTYPE_Normal)
-    {
-        return true;
-    }
-
-    if (ParentClass == UActorComponent::StaticClass() || ParentClass == USceneComponent::StaticClass())
-    {
-        return InType == EBlueprintType::BPTYPE_Normal || InType == EBlueprintType::BPTYPE_FunctionLibrary;
-    }
-
-    if (ParentClass == APlayerController::StaticClass() || ParentClass == APlayerState::StaticClass() || ParentClass == AGameModeBase::StaticClass() || ParentClass == AGameStateBase::StaticClass())
-    {
-        return InType == EBlueprintType::BPTYPE_Normal;
-    }
-
-    return InType == EBlueprintType::BPTYPE_Normal || InType == EBlueprintType::BPTYPE_Interface || InType == EBlueprintType::BPTYPE_FunctionLibrary || InType == EBlueprintType::BPTYPE_MacroLibrary;
-}
-#endif
