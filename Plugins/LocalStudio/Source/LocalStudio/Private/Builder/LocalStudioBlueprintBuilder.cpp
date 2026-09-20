@@ -3386,12 +3386,18 @@ bool FLocalStudioBlueprintBuilder::CreateSquareRootNode(UBlueprint* Blueprint, U
         SquareRootNode->ReconstructNode();
         
         // Set position if specified in the JSON - FIXED: Use FString instead of TEXT macro
-        TSharedPtr<FJsonObject> PositionObject;
-        if (NodeObject->TryGetObjectField(FString(TEXT("position")), PositionObject))
+        const TSharedPtr<FJsonObject>* PositionObject = nullptr;
+
+        if (NodeObject->TryGetObjectField(TEXT("position"), PositionObject) &&
+            PositionObject &&
+            PositionObject->IsValid())
         {
-            int32 X = 0, Y = 0;
-            PositionObject->TryGetNumberField(TEXT("x"), X);
-            PositionObject->TryGetNumberField(TEXT("y"), Y);
+            int32 X = 0;
+            int32 Y = 0;
+
+            (*PositionObject)->TryGetNumberField(TEXT("x"), X);
+            (*PositionObject)->TryGetNumberField(TEXT("y"), Y);
+
             SquareRootNode->NodePosX = X;
             SquareRootNode->NodePosY = Y;
         }

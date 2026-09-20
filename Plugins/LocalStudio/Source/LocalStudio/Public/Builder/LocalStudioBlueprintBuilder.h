@@ -37,6 +37,6 @@ public:
     bool ProcessFunctionNodes(UBlueprint* Blueprint, TSharedPtr<FJsonObject> ParsedData, int32& NodesAdded, int32& NodesSkipped);
     bool ProcessFunctionConnections(UBlueprint* Blueprint, TSharedPtr<FJsonObject> ParsedData, int32& ConnectionsMade, int32& ConnectionsSkipped);
     bool ProcessMathNode(UBlueprint* Blueprint, UEdGraph* FunctionGraph, const TSharedPtr<FJsonObject>& NodeObject, const FString& NodeId, const FString& NodeType, const FString& FunctionName);
-    bool CreateSquareRootNode(UBlueprint* Blueprint, UEdGraph* FunctionGraph, const FString& NodeId, const TSharedPtr<FJsonObject>& NodeObject);
+    bool CreateSquareRootNode(UBlueprint* Blueprint, UEdGraph* FunctionGraph, const FString& NodeId, const TSharedPtr<FJsonObject>& NodeObject, const FString& FunctionName);
 
 };

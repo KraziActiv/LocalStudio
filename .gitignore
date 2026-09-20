@@ -1,0 +1,30 @@
+# Unreal generated folders
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# IDE files
+.vs/
+.vscode/
+.idea/
+
+# Visual Studio files
+*.sln
+*.suo
+*.user
+*.userprefs
+*.VC.db
+*.VC.opendb
+
+# Project-level test content
+Content/
+
+# Local machine configuration
+.env
+*.local.ini
+
+# OS files
+.DS_Store
+Thumbs.db
