@@ -1,0 +1,100 @@
+LocalStudio Plugin — Test Prompt Library
+1. Procedural Terrain & Landscape Generation
+Basic Procedural Landscape
+Create a landscape to be a foggy horror valley. Give it flat, open valley floors so players can build bases, but surround it with extremely steep, jagged, cliff-like mountains to block their sightlines. Set import_type to procedural.
+
+Advanced Procedural Landscape (With Specific Biomes)
+Create a landscape to be a foggy horror valley. Give it flat, open valley floors so players can build bases, but surround it with extremely steep, jagged, cliff-like mountains to block sightlines. Add rolling hills and shallow slopes, plateau areas in the mountains, and carved-out areas for rivers, streams, lakes, and a deep ocean on one side with a realistic beach shoreline.
+
+Parameterized Landscape (Detailed Style)
+Create a landscape to be a foggy horror valley with these settings:
+
+Flat, open valley floors for base building (valley_flattening: 0.5)
+
+Steep, jagged cliff mountains (elevation_scale: 18000.0, slope_power: 1.8, noise_scale: 0.0015)
+
+Mountain plateaus (plateau_clamping: 0.85)
+
+Rolling hills, shallow slopes, and water features (rivers, lakes, ocean beach)
+
+2. Real-World Real-Scale Landscapes
+Simple Real-World Prompt
+Generate a real-world landscape for Mt. Fuji at latitude 35.3606 and longitude 138.7274. Set import_type to real_world.
+
+Sized Real-World Prompt
+Generate a real-world landscape 20 square miles in size for Mt. Fuji at latitude 35.3606 and longitude 138.7274.
+
+Real-World Coordinates Quick-Test Reference
+Mt Fuji, Japan (35.3606, 138.7274) — Iconic volcanic cone; radial symmetry & gradients.
+
+Grand Canyon, USA (36.1069, -112.1129) — Deep, stepped elevation drops; tests erosion smoothing.
+
+Chamonix / Mont Blanc, France (45.9227, 6.8685) — High-frequency alpine peaks; tests sharp vertical edges.
+
+Uluru, Australia (-25.3444, 131.0369) — Monolith on flat land; tests plateau transitions.
+
+Big Sur, USA (36.1075, -121.5540) — Sharp coastal cliffs rising from the ocean.
+
+Na Pali Coast, Hawaii (22.1850, -159.6258) — Thin volcanic ridges & ocean drops.
+
+Lofoten Islands, Norway (67.9331, 13.0888) — Steep glacial fjords.
+
+Table Mountain, South Africa (-33.9800, 18.3700) — Massive flat-topped coastal sandstone cliffs.
+
+3. Materials & Shaders
+Pulsing Material
+Create a base material called M_PulseGlow with a glowing cyan color that pulses smoothly.
+
+Flashing Material
+Create a base material called M_WarningLight with an emissive red color that flashes fast.
+
+Shield / Fresnel Material
+Create a base material called M_EnergyShield with a dark metallic base and a bright blue fresnel rim glow.
+
+Material Instance Creation
+Create a material instance named MI_GlowingRed derived from M_PulseGlow.
+
+Delayed Color Flash
+Create a futuristic material with different flashing colors and a 3 second delay between flashes.
+
+Material Functions & Functions Usage
+Create a material function named MF_LocalStudio_WorldTriplanar in /Game/LocalStudio/Materials/Functions. It should take a scalar input named Tiling (default value 0.005) and output a vector output named WorldUVs.
+
+Follow-Up Prompt:
+Create a material named M_TestTriplanarUsage in /Game/LocalStudio/Materials. It should use the material function /Game/LocalStudio/Materials/Functions/MF_LocalStudio_WorldTriplanar to drive the UVs of a BaseColor texture sampler.
+
+4. Character Architecture & Metabolism (C++)
+Simple Master Character Prompt
+Create a MasterCharacter class for a multiplayer survival game that will be used as a parent for both Player and AI characters. Place it in the MasterFiles folder.
+
+Simple Metabolism Character Prompt
+Create a base character class called AMasterCharacter in MasterFiles. Give it a SCUM-style metabolism system with core vitals, macronutrients, and replication support for a multiplayer game.
+
+Technical Production Character Prompt (Detailed Architecture)
+Create a production-ready C++ base character class AMasterCharacter for Unreal Engine 5 designed for multiplayer games, serving as the parent class for both playable characters and AI NPCs. Place this file in MasterFiles.
+
+Implement a SCUM-style metabolism and nutrition system with full network replication:
+
+Core Vitals: Health, Stamina, Exhaustion, Body Mass (Weight/BMI), and Blood Pressure/Heart Rate.
+
+Nutrition: Macronutrients (Calories, Proteins, Carbs, Fats, Fiber, Hydration) and Micronutrients (Vitamins A, B, C, D, and Minerals). Include digestion logic that processes food buffers over time.
+
+Replication: Server-to-client replication with GetLifetimeReplicatedProps and OnRep handlers. Set bReplicates = true.
+
+Inheritance & Accessors: Native ACharacter setup with capsule root, blueprint-callable getters, and server ingestion functions.
+
+5. Components & UI Integration (C++)
+Stats Component (Basic)
+Create a StatsComponent in MasterFiles that tracks Health, Stamina, Hunger, and Thirst with replication, delegates, and other human-like vitals. Place it in the Components folder.
+
+Stats Component (Advanced Progression & Vitals)
+Create a StatsComponent for a multiplayer survival game that holds real-life vitals, health, metabolism, nutrition, and progression logic to level up stats over time. Place it in the Components folder.
+
+Dedicated Health Component (RPC Damage)
+Create a UActorComponent named LocalHealthComponent with float Health and MaxHealth, a function to clamp health using FMath, and a Server RPC to take damage.
+
+UI Progress Bar Integration
+Create a UUserWidget C++ class named UPlayerHUDWidget in the UI folder. It should take a reference to a UStatsComponent and expose functions or delegates to update Health and Stamina progress bars.
+
+System Integration / Linking Prompt
+Modify MasterCharacter to instantiate and attach UStatsComponent, forward TakeDamage calls to the component, and remove local health variables so UStatsComponent is the sole authority on health.
