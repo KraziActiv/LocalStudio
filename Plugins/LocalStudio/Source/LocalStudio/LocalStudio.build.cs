@@ -58,7 +58,8 @@ public class LocalStudio : ModuleRules
         "DesktopPlatform",
         "SourceCodeAccess",
         "Kismet",
-        "BlueprintGraph"
+        "BlueprintGraph",
+        "UMG"
             }
         );
 
